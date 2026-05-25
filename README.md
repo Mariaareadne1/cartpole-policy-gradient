@@ -1,104 +1,96 @@
-# rl-reacher
+# cartpole-policy-gradient
 
-A 2-joint robot arm trained to reach a target using policy gradient reinforcement learning — implemented from scratch in PyTorch.
+REINFORCE policy gradient implemented from scratch in PyTorch, trained on CartPole-v1.
 
-No stable-baselines, no RL libraries. The training loop, policy network, and REINFORCE algorithm are all written by hand.
+**Result: solved in 288 episodes. 20/20 perfect episodes at eval (mean return 500/500).**
 
 ---
 
 ## What it does
 
-A simulated planar robot arm with two joints learns, through trial and error, to move its fingertip to a randomly-placed target. The policy — a neural network that maps arm state to joint torques — is trained with the REINFORCE algorithm.
+A neural network learns to balance a pole on a cart by deciding which direction to push — trained purely through trial and error, with no hand-coded rules.
 
-**State (8D):** joint angles (as cos/sin pairs), target position, fingertip-to-target error vector  
-**Action (2D):** continuous torques for each joint, clipped to [-1, 1]  
-**Reward:** `-distance(fingertip, target)` — dense, so the arm gets a gradient signal every step
+The policy, training loop, and return computation are all written by hand. No stable-baselines, no RL libraries — just PyTorch and Gymnasium.
+
+```
+Training REINFORCE on CartPole-v1...
+  ep    0 | avg return   15.0
+  ep   50 | avg return   72.8  ███
+  ep  100 | avg return  212.9  ██████████
+  ep  150 | avg return  292.8  ██████████████
+  ep  200 | avg return  396.6  ███████████████████
+  ep  250 | avg return  484.6  ████████████████████████
+  ✓ Solved at episode 288!
+
+Eval over 20 episodes:
+  Mean return:   500.0  (max 500)
+  Solved (≥475): 20/20 episodes
+```
 
 ---
 
-## The RL implementation
+## The algorithm
+
+REINFORCE: run an episode, collect rewards, update the policy to make good actions more likely.
 
 ```python
-# REINFORCE in one paragraph:
-# 1. Run episode, collect (state, action, reward) trajectory
-# 2. Compute discounted returns G_t = r_t + γ·r_{t+1} + ...
-# 3. Normalize returns (variance reduction)
-# 4. Update: maximize E[G_t · log π(a_t | s_t)]
-
-loss = -(log_probs * returns).mean()
-optimizer.zero_grad()
+# Core update — the whole algorithm in four lines:
+returns   = compute_discounted_returns(rewards, gamma=0.99)
+log_probs = torch.stack(log_probs)
+loss      = -(log_probs * returns).mean()
 loss.backward()
-optimizer.step()
 ```
 
-The policy is a Gaussian: the network outputs a mean action, and a learned `log_std` parameter controls exploration. As training progresses, `log_std` decreases — the arm becomes more deliberate.
+**Key implementation detail — batch REINFORCE:**
+Single-episode return normalization destroys the learning signal (every episode gets normalized to mean=0, std=1 regardless of quality). Instead, I collect 5 episodes per update and normalize returns across the whole batch. This was the difference between flat training curves and convergence.
+
+---
+
+## Policy network
+
+```
+Input (4D): [cart_position, cart_velocity, pole_angle, pole_angular_velocity]
+
+Linear(4 → 64) → Tanh
+Linear(64 → 64) → Tanh
+Linear(64 → 2)  → Categorical distribution over [push-left, push-right]
+```
+
+At training time: sample from the distribution (exploration).  
+At eval time: take the argmax (greedy).
 
 ---
 
 ## Run it
 
 ```bash
-pip install torch numpy
-python train.py --episodes 2000
+pip install torch gymnasium
+python train.py
 ```
 
-Logs to `training_log.json`. To evaluate a saved policy:
+Trains in ~2 minutes. To evaluate a saved checkpoint:
 
 ```bash
 python train.py --eval
 ```
 
-Expected output after ~1000 episodes:
-```
-Eval over 20 episodes:
-  Mean final dist to target: 0.087
-  Reached within 0.1:  17/20 episodes
-```
-
----
-
-## Browser visualizer
-
-Open `visualizer.html` — no server needed. Shows the arm learning in real time:
-
-- Watch early episodes: random flailing
-- Watch episodes 200–400: the arm starts orienting toward the target
-- Watch 600+: consistent reaching
-
-The link color shifts from red → green as the fingertip approaches the target.
-
----
-
-## Architecture
-
-```
-PolicyNetwork:
-  Linear(8, 64) → Tanh
-  Linear(64, 64) → Tanh
-  Linear(64, 2)       → mean actions
-
-  log_std             → learnable parameter (shared)
-```
-
-Small on purpose: the environment is low-dimensional. Bigger networks don't help here and make the training dynamics harder to interpret.
-
 ---
 
 ## Why I built this
 
-I've spent a lot of time building systems where emergent behavior comes from simple rules — cellular automata, generative music, live coding. RL felt like the same idea applied to physical control: you don't program the behavior, you specify what counts as good, and the system figures out the rest.
+I've been building systems where behavior emerges from rules — cellular automata, generative music, live coding. RL is the same idea applied to physical control: instead of specifying the behavior, you specify what counts as good, and the system figures out the rest.
 
-The reacher is a clean case of that. The reward function is one line. The behavior that emerges — a two-joint arm learning coordinated movement to reach arbitrary targets — is genuinely interesting to watch happen.
+CartPole and the [PID inverted pendulum](https://github.com/Mariaareadne1/inverted-pendulum-pid) are the same physical problem solved two ways — one with a hand-tuned feedback controller, one with a learned policy. Comparing them is interesting: PID is faster to tune and perfectly interpretable; RL generalizes but needs thousands of rollouts to find what PID gets analytically.
 
 ---
 
 ## Files
 
 ```
-train.py          — environment, policy network, REINFORCE loop (PyTorch)
-visualizer.html   — browser-based training visualization
-checkpoints/      — saved policy weights (after training)
-training_log.json — episode returns (plot with tensorboard or matplotlib)
+train.py              — policy network + REINFORCE loop (PyTorch)
+visualizer.html       — browser visualization of the training curve
+checkpoints/policy.pt — saved weights after training
+training_log.json     — episode returns (for plotting)
 ```
 
 ---
